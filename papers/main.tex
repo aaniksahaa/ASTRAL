@@ -1,0 +1,145 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath, amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\title{ASTRAL-MP: scaling ASTRAL to very large datasets using randomization and parallelization}
+\author{John Yin$^1$, Chao Zhang$^2$ and Siavash Mirarab$^3$\thanks{To whom correspondence should be addressed.}\\
+$^1$Department of Mathematics, $^2$Bioinformatics and Systems Biology and $^3$Department of Electrical and Computer Engineering,\\
+University of California at San Diego, La Jolla, CA 92093, USA}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\textbf{Motivation:} Evolutionary histories can change from one part of the genome to another. The potential for discordance between the gene trees has motivated the development of summary methods that reconstruct a species tree from an input collection of gene trees. ASTRAL is a widely used summary method and has been able to scale to relatively large datasets. However, the size of genomic datasets is quickly growing. Despite its relative efficiency, the current single-threaded implementation of ASTRAL is falling behind the data growth trends is not able to analyze the largest available datasets in a reasonable time.\\
+\textbf{Results:} ASTRAL uses dynamic programing and is not trivially parallel. In this paper, we introduce ASTRAL-MP, the first version of ASTRAL that can exploit parallelism and also uses randomization techniques to speed up some of its steps. Importantly, ASTRAL-MP can take advantage of not just multiple CPU cores but also one or several graphics processing units (GPUs). The ASTRAL-MP code scales very well with increasing CPU cores, and its GPU version, implemented in OpenCL, can have up to $158\times$ speedups compared to ASTRAL-III. Using GPUs and multiple cores, ASTRAL-MP is able to analyze datasets with 10000 species or datasets with more than 100000 genes in $<2$ days.\\
+\textbf{Availability and implementation:} ASTRAL-MP is available at \texttt{https://github.com/smirarab/ASTRAL/tree/MP}.\\
+\textbf{Contact:} \texttt{smirarab@ucsd.edu}\\
+\textbf{Supplementary information:} Supplementary data are available at Bioinformatics online.
+\end{abstract}
+
+\section{Introduction}
+Genome-wide discordance is a defining feature of modern phylogenetic studies (e.g. Jarvis et al., 2014; Pollard et al., 2006; Wickett et al., 2014; Zwickl et al., 2014). A species tree represents the overall evolutionary history of species while gene trees show the phylogeny specific to regions of the genome (called loci or genes) (Maddison, 1997). Gene trees can be discordant with each other and with the species tree (Degnan and Rosenberg, 2009). Recent phylogenomic datasets include hundreds to thousands of loci. Ignoring discordance and concatenating all loci can be misleading (Kubatko and Degnan, 2007; Roch and Steel, 2015), and this observation has motivated the search for efficient and statistically rigorous methods of species tree estimation without concatenation. A ubiquitous cause of discordance is incomplete lineage sorting (ILS), a process related to coalescence histories of genealogies (Degnan and Rosenberg, 2009). ILS is often modeled by the multispecies coalescent model (Pamilo and Nei, 1988; Rannala and Yang, 2003).
+
+Several types of statistically consistent methods have been developed to infer species trees in the presence of ILS (e.g. Bryant et al., 2012; Chifman and Kubatko, 2014; Heled and Drummond, 2010; Liu, 2008). The most scalable family of methods are summary methods, which first estimate gene trees from the individual loci and then combine the gene trees to get the species tree. Researchers have developed many statistically consistent summary methods, including, STAR (Liu et al., 2009), GLASS (Mossel and Roch, 2010), MPEST (Liu et al., 2010), STELLS (Wu, 2012), Bucky-quartets (Larget et al., 2010), DISTIQUE (Sayyari and Mirarab, 2016a), NJst (Liu and Yu, 2011) and ASTRID (Vachaspati and Warnow, 2015).
+
+ASTRAL (Mirarab et al., 2014b) is a widely used summary method. It has been used for many groups of species (e.g. Arcila et al., 2017; Blom et al., 2016; Hosner et al., 2015; Laumer et al., 2015; Mitchell et al., 2017; Rouse et al., 2016; Tarver et al., 2016; Wickett et al., 2014). ASTRAL seeks to find the tree that shares the maximum number of induced quartet trees with the input set. This problem can be solved using a dynamic programing approach, an observation first made by Bryant and Steel (2001) and derived independently by Mirarab et al. (2014b). The dynamic programing solves an NP-hard problem (Lafond and Scornavacca, 2018) but uses heuristics to constrain the search space. The original ASTRAL code had $O(n^4 k^3)$ running time for $n$ species and $k$ gene trees. Newer versions ASTRAL-II (Mirarab and Warnow, 2015), ASTRAL-III (Zhang et al., 2018) and ASTRAL-multi-individual (Rabiee et al., 2019) have changed the search space and the details of the dynamic programing. The current version, ASTRAL-III runs in $O((n k)^{1.75} D)$ where $D=O(n k)$ is the sum of degrees of all unique nodes in input trees. In practice, the running time of ASTRAL-III tends to grow quadratically with $n$ and $k$, though the amount of gene tree discordance also matters (Zhang et al., 2018). ASTRAL-III has been able to handle datasets with $k=1000$ genes and $n=5000$ species given at most three days of running time.
+
+Despite the progress on scalability, large datasets that push ASTRAL-III to its limits are now available, and as new genomes get sequenced, more datasets will test limits of ASTRAL-III. Moreover, the number of input trees can also quickly grow. Even with only 48 bird species, ASTRAL-III took 32 h to analyze a dataset of 14446 gene trees (Zhang et al., 2018). Interestingly, several relationships remained unresolved even with 14446 gene trees, an issue that may be solved by mining even more loci from the genomes. Increasing the number of loci to 30000 could take about 5 days of running time, starting to make ASTRAL-III impractical. Moreover, several hundreds of avian genomes will be available in the near future. ASTRAL-III on 14000 gene trees with 300 species will take close to 50 days of running time, again making it impractical. Moreover, the number of gene trees can increase many folds if we represent each locus not with a single point estimate of the tree but with a distribution of trees.
+
+In this paper, we introduce ASTRAL-MP, a new version of ASTRAL that uses shared-memory CPU parallelism, graphics processing unit (GPU) parallelism, AVX2 vectorization and a new randomized algorithm to dramatically scale ASTRAL-III. ASTRAL-MP has great speedups compared to ASTRAL-III and shows perfect scaling (tested for up to 24 cores) on some datasets. With GPUs, the speedups can be up to $158\times$ compared to ASTRAL-III.
+
+\section{Materials and methods}
+
+\subsection{Background on ASTRAL}
+The input is a set $\mathcal{G}$ of unrooted gene trees labeled by the leaf-set $\mathcal{S}$ with $|\mathcal{S}|=n$ and $|\mathcal{G}|=k$. Each of the $\binom{n}{4}$ selections of four leaves induces an unrooted quartet tree in each of the $k$ trees in $\mathcal{G}$. The weighted quartet score of a given tree $T$ with respect to $\mathcal{G}$ is defined as the number of the $k\binom{n}{4}$ quartet trees induced by $\mathcal{G}$ that are identical topologically to the quartet tree induced by $T$ on the same quartet. The definition can be easily extended to gene trees with missing data and multifurcations by simply counting fully resolved quartet trees present in a gene tree. ASTRAL finds the species tree that maximizes this score using dynamic programing.
+
+A tripartition of $\mathcal{S}$ corresponds to a node in a binary unrooted species tree $T$. ASTRAL uses the fact that tripartitions can be scored with respect to the $\mathcal{G}$ in isolation from the rest of the tripartitions in $T$. Let $P=A_1|A_2|A_3$ be a tripartition and $M=M_1|\ldots|M_d$ be a $d$-partition of $\mathcal{S}$, and let $I_{i j}=|A_i \cap M_j|$. A species tree that includes $P$ will have to share some quartet trees with a gene tree that includes $M$; call this quantity $QI(P, M)$. Mirarab and Warnow (2015) showed how to compute $QI$ in $\Theta(d^3)$ time and Zhang et al. (2018) derived a new formula for $QI$:
+\begin{equation}
+\frac{1}{2} \sum_{i=1}^d \sum_{j=1}^k \binom{I_{i j}}{2} \left( (S_{k_i} - I_{k_j})(S_{k_i} - I_{k_j}) - S_{k_i k_j} + I_{k_j} \right)
+\end{equation}
+where $a=\begin{bmatrix} 2 & 1 & 1 \end{bmatrix}$, $b=\begin{bmatrix} 3 & 3 & 2 \end{bmatrix}$, $S_j=\sum_{i=1}^d I_{i j}$ and $S_{j k}=\sum_{i=1}^d I_{i k} I_{i j}$. With this, ASTRAL-III can compute $QI$ in $\Theta(d)$. We further define the weight of a tripartition, $w(P)$, as the total score of $P$:
+\begin{equation}
+w(P) = \frac{1}{2} \sum_{g \in \mathcal{G}} \sum_{P' \in \mathcal{N}(g)} QI(P, P')
+\end{equation}
+where $\mathcal{N}(g)$ is the set of internal nodes in $g$, represented as $d$-partitions.
+
+The ASTRAL dynamic programing starts from the set $\mathcal{S}$ and recursively divides into two subsets that maximize the sum of the weights below the current subset. If we consider all ways of partitioning a `cluster' $A \subset \mathcal{S}$ into $A'$ and $A \setminus A'$, the problem is solved exactly in exponential time. To obtain a polynomial time algorithm, we constrain the search. Let $X'$ be a set of bipartitions, and define $X=\{ A : A | S \setminus A \in X' \}$ and $Y=\{(C, D) : C \in X, D \in X, C \cap D = \varnothing, C \cup D \in X\}$. The dynamic programing only considers $(A', A \setminus A') \in Y$. Defining $V(A)$ as the score for an optimal subtree on the cluster $A$ and setting $V(A)=0$ for $|A|=1$, the dynamic programing recursion is given by:
+\begin{equation}
+V(A) = \max_{(A', A \setminus A') \in Y} V(A') + V(A \setminus A') + w(A'|A \setminus A'|S \setminus A)
+\end{equation}
+The definition of $X$ has changed from ASTRAL-I to ASTRAL-III. All three versions include the set of bipartitions observed in (completed) input gene trees. ASTRAL-II and ASTRAL-III further add to that set using heuristics and ASTRAL-III ensures $|X|=O(n k)$ (Zhang et al., 2018).
+
+Depending on how gene trees are represented in memory, computing tripartition weights using Equation (2) can be done in either $\Theta(n k)$ or $\Theta(D)=O(n k)$ where $D$ is the sum of degrees of all unique nodes in $\mathcal{G}$. Gene trees can be represented in memory coodensely as an array of $\Theta(n k)$ numbers representing the post-order traversal of gene trees. Computing $w(P)$ for a tripartition $P=A_1|A_2|A_3$ will simplify to a post-order traversal of all gene trees by iterating through the array representation of $\mathcal{G}$ and keeping a stack for $I_{i j}$ values, which can be each compared in $\Theta(d)$ (Supplementary Algorithm S1). An alternative introduced in ASTRAL-III is to use a polytree to represent $\mathcal{G}$. The polytree overlays all gene trees on top of each other into a DAG. In this polytree, nodes that appear identically in
+
+\subsection{Randomized cluster partitioning}
+Moreover, using our definition of $G$, this check can be performed efficiently using simple additions on 64-bit integers and the use of a hashed set to represent $X$.
+
+For clusters $A, B, C \in X$ represented by $\mathbf{a}, \mathbf{b}, \mathbf{c}$, if $B|C$ is not a partition of $A$, then $\mathbf{c} \neq \mathbf{a} - \mathbf{b}$; equivalently, for $\mathbf{d} = \mathbf{b} + \mathbf{c} - \mathbf{a}$, we have $\mathbf{d} \neq 0$. Note that $\mathbf{d} \in \{-1, 0, 1, 2\}^*$. We now consider three possible cases and compute the probability of the event $\phi(\mathbf{c}) = \phi(\mathbf{a}) - \phi(\mathbf{b})$ when $\mathbf{c} \neq \mathbf{a} - \mathbf{b}$, or equivalently $\phi(\mathbf{d}) = 0$ when $\mathbf{d} \neq 0$.
+
+Case 1: $\mathbf{d}_i = 1$ for some $i$. Then,
+\begin{align*}
+P(\phi(\mathbf{d}) = 0) &= P\left( \left( \sum_{i=1}^{i-1} \mathbf{d}_i g_i \right) + g_i + \left( \sum_{i=i+1}^n \mathbf{d}_i g_i \right) = 0 \right) \\
+&= P\left( g_i = -\sum_{i=1}^{i-1} \mathbf{d}_i g_i - \sum_{i=i+1}^n \mathbf{d}_i g_i \right) = \frac{1}{|G|} \leq \frac{1}{|H|}
+\end{align*}
+The last equality follows from the fact that $g_i$ is chosen uniformly at random from $G$ and is chosen independently from all $g_i, i \neq i$ values. The inequality follows from the construction of $H$.
+
+Case 2: $\mathbf{d}_i = -1$ for some $i$. By similar logic, $P(\phi(\mathbf{d}) = 0) \leq \frac{1}{|H|}$.
+
+Case 3: $\mathbf{d} \in \{0, 2\}^*$ and thus, $\mathbf{d}_i = 2$ for some $i$. Then:
+\[
+P(\phi(\mathbf{d}) = 0) = P\left( 2 g_i = -\sum_{i=1}^{i-1} \mathbf{d}_i g_i - \sum_{i=i+1}^n \mathbf{d}_i g_i \right) \leq \frac{1}{|H|}
+\]
+
+Therefore, by a union bound, the probability that there exist clusters $A, B, C \in X$ such that $B|C$ is not a way of partitioning $A$ and $\phi(\mathbf{c}) = \phi(\mathbf{a}) - \phi(\mathbf{b})$ is no greater than $|X|^2 \frac{1}{|H|}$. Finally, recalling that $|H| \geq |X|^3$, the probability that the algorithm fails is no greater than:
+\[
+|X|^2 \frac{1}{|H|} \leq |X|^2 \frac{1}{|X|^3} = \epsilon .
+\]
+
+\textbf{Choice of $p$.} We implement $G$ as an array of $p$ unsigned 64-bit numbers. The choice of $p$ controls $|G| = 2^{64p}$ and $|H| = 2^{63p}$. Therefore, for a given $|X|$ and a desired upperbound for failure rate $\epsilon$, we need to ensure that $2^{63p} \geq \frac{|X|^2}{\epsilon}$, equivalently, $p \geq \frac{1}{63} \log_2 |X| + \frac{1}{63} \log_2 \left( \frac{1}{\epsilon} \right)$.
+
+The algorithm first stores $\phi(\mathbf{c})$ for each $C \in X$ in a hash table and then for each pair of $A, B \in X$ checks whether there exists a $C$ in the hash table such that $\phi(\mathbf{c}) = \phi(\mathbf{a}) - \phi(\mathbf{b})$. Thus, we access the hash table $O(|X|^2)$ times, and each requires $O(p)$ 64-bit operations. The total running time is $O(|X|^2 p) = O(|X|^2 (\log |X| + \log (\frac{1}{\epsilon})))$.
+
+In ASTRAL-III, $|X|$ has been in the order of $10^3 - 10^5$ even for the large datasets we have tested (Zhang et al., 2018) and has never exceeded $5 \times 10^6$ even for $n = 10^4$. When $|X| \gg 10^6$, ASTRAL-MP will likely become too slow to be useful. Thus, in practice, it is safe to assume $|X| \leq 10^6$ (note that we are allowing three orders of magnitude above what we have seen in practice). Setting the probability of error $\epsilon = 10^{-10}$, it can be checked that $p = 2$ is enough (Supplementary Fig. S1). Thus, by default, we use $p = 2$ integers (each 64-bit) to build $G$.
+
+\subsection{Parallelization}
+
+\subsubsection{Weight calculation}
+We parallelize weight calculation using vectorization, multithreaded CPU and GPU. The dynamic programing shown in Equation (3) needs to compute the weight for every tripartition corresponding to each element of $Y$. The weights of different tripartitions are independent, and therefore, we can compute them separately and in parallel. Parallelizing the calculation of weights over different tripartitions (as opposed to parallelizing the calculation of a single weight over different gene trees) avails itself to SIMD execution, which makes it suitable for vectorization and GPU.
+
+\textbf{CPU.} We assign each thread a chunk of tripartitions to score. To have enough weights to score in parallel, we need to change the code structure. ASTRAL-III implements the dynamic programing recursively [as in Equation (3)] and computes weights only when it encounters new tripartitions. As a result, only a few tripartitions are examined in a single call of $V(A)$, resulting in only limited parallelism. To increase parallelism, we changed the architecture so that the discovery of new tripartitions that need to be weighted happens simultaneously with weight calculation. We achieve this using several threads, including a producer of tripartitions, an `assigner', and a consumer of tripartitions (Fig. 2).
+
+The producer and the consumer threads both run recursions of Equation (3) in an identical order. However, the producer does not compute weights; it simply computes cluster partitions and adds the resulting tripartitions to an `unweighted tripartitions' queue. The `assigner' thread reads from the unweighted tripartitions queue, builds batches of tripartitions (default batch size: 10) and creates a new short-lived thread for that batch of tripartitions. This short-lived thread computes the weights using Equations (1) and (2), and adds $w(P)$ to a `results' queue (in two steps, as we will see). The consumer also runs through the recursive Equation (3) but each time it needs a $w(P)$, it simply reads the value off of the results queue, waiting on the queue if needed.
+
+Note that producer and consumer threads need to run in exactly the same order. Thus, calculated weights should be put in the final results queue in the same order in which they are put in the `unweighted tripartitions' queue. The assigner thread achieves this by attaching an ascending id to each tripartition it reads from the unweighted tripartitions. The short-lived threads send their results to a shared `results priority queue' which sorts the computed tripartition weights by their ids and keeps track of the highest id that has been scored. When the top of the priority queue matches the next required id, results are moved from the priority queue to the final results queue. Accesses to the result queues and the highest id are synchronized using a lock. Algorithm 1 gives exact steps run by each short-lived thread.
+
+\textbf{Vectorization.} When the processor supports AVX2, we further parallelize by computing several weights simultaneously using vectorization. AVX2 allows four 64-bit integer operations per instruction cycle and sixteen 16-bit integer operations per instruction cycle. Weight calculation consists of two parts: computing intersection sizes $\{I_{i j}\}$ and computing the final score using Equation (1). Intersections sizes are never more than $n$ and thus comfortably fit a 16-bit integer; however, weight scores are of the order $k n^3$ and require 64-bit. Since each 512-bit cache line can store 32 16-bit integer, we process weights in batches of size 32 to fit one line. We use 16-bit integers to represent and compute intersection size and get 16-way parallelism using AVX2. We then convert 16-bit integers to 64-bit integers and compute tripartition scores using 64-bit integer operation and get 4-way parallelism. We implemented the weight calculation using C, which is invoked as a kernel from our Java code.
+
+\textbf{GPU parallelization.} Parallelizing for GPU requires care because the memory is limited, data transfer between CPU and GPU can be costly, and GPU threads execute instructions in SIMD. The decoupled architecture of ASTRAL-MP (Fig. 2) enables us to delegate the weight calculation step to external devices such as GPU. To deal with the limited memory available to each GPU thread, we opted to use the simple and compact array representation of $\mathcal{G}$ instead of the polytree in the GPU kernel.
+
+Due to the SIMD nature of GPU threads, the efficiency is higher if threads avoid taking different paths in the control flow of the code. For example, if there is a if, then, else condition, ideally, either all threads should go through if or all threads should go through else. Violating this will result in stalls and therefore delays. Our existing architecture accounts for this difficulty. As mentioned earlier, we parallelize weight calculation by simultaneously computing $w(P)$ functions for a collection of $P$ tripartitions. The process for calculating weights of several tripartitions follows an identical control path, only with different data. Thus, our choice to parallelize by weights readily provides us with data parallelism, appropriate for SIMD architectures.
+
+We implemented an OpenCL kernel for calculating a set of $w(P)$ values using Equation (2). We used the JOCL package to connect the GPU and CPU and to compile the OpenCL code for the given machine dynamically (to ensure portability). Each GPU device has an associated short-lived CPU thread, used to handle communication with the GPU, and these threads correspond to the short-lived threads in Figure 2. The assigner thread reserves some space on the main memory to keep (i) gene trees (represented as an array of numbers), (ii) a queue per GPU device to contain batches (default size $2^{11}=8192$) of tripartitions to be sent to GPU for scoring and (iii) a queue per GPU device to be filled with computed scores. The CPU communicates with the GPU through buffers corresponding to these arrays (buffers are managed by OpenCL). The first two buffers are read-only, while the last one is write-only. On the GPU, all the read-only data reside in the global memory because due to their large size, they could not fit other types of memory on the device, such as local or constant memory. The short-lived thread, after invoking the GPU kernel, stalls and waits for the results. The GPU executes the kernel on the entire batch of tripartitions sent to it. When the GPU finishes, the CPU thread wakes up and uses the third buffer to read the results into the main memory. This whole process is in lieu of lines 2-4 of Algorithm 1; once the short-lived thread wakes up, it runs through the rest of Algorithm 1, starting line 5.
+
+\begin{algorithm}
+\caption{The procedure run by each short-lived thread to calculate weights and to propagate results first to the priority queue and then to the final queue. $A$ is a list that contains $r$ tripartitions, id pairs.}
+\begin{algorithmic}[1]
+\State \textbf{Global Variables:}
+\State \textit{resultsPQ}: a priority queue sorted by id (ascending)
+\State \textit{resultsQ}: a queue of scores, read by the consumer thread
+\State \textit{currentID}: id of the last score added to resultsQ
+\State \textit{globalLock}: a lock for the previous three global variables
+\Procedure{ProcessTripartitions}{$A$}
+\State $R \leftarrow$ array of size $r$
+\For{$0 \leq i < r$}
+\State $R[i] \leftarrow w(A[i].tripartition)$ computed by Equation (2)
+\EndFor
+\State lock (\textit{globalLock})
+\For{$0 \leq i < r$}
+\State \textit{resultsPQ}.add($(w: R[i], id: A[i].id)$)
+\State \textbf{while} \textit{currentID} = \textit{resultsPQ}.top().id \textbf{do}
+\State \textit{resultsQ}.add (\textit{resultsPQ}.top().w)
+\State \textit{resultsPQ}.pop()
+\State \textit{currentID} $\leftarrow$ \textit{currentID} + 1
+\EndFor
+\State unlock (\textit{globalLock})
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Parallelizing other steps}
+Several other steps of ASTRAL are also parallelized for better scaling. Beyond the following, other smaller steps are not parallelized.
+
+\textbf{Similarity matrix.} ASTRAL computes a similarity matrix by traversing all gene trees, measuring the number of quartets that put each pair of taxa together in that gene tree and adding up these numbers across gene trees. This part of the code is simply parallelized by having each thread work on a different gene tree, allocating a different matrix to each thread; in the end, all matrices are combined.
+
+\textbf{Building set $X$.} ASTRAL needs to iterate over all gene trees and add their bipartitions to the set $X$. This step is trivially parallelized by letting each thread work on a different gene tree. Then, ASTRAL-III heuristics augment $X$ using distance matrices and a series of greedy trees computed from gene trees. The computation of the greedy consensus trees does not avail itself to much parallelism. The processing of polytomies in the greedy consensus is parallelized by assigning each polytomy to a different thread.
+
+\textbf{Cluster partitioning.} Computing partitions of a cluster $A$ (as described in Section 2.3) is parallelized such that each thread computes all possible partitions with a certain cardinality for the two subsets of the partition.
+
+\textbf{Scoring branches.} Once the final tree is computed, we need to compute localPP (Sayyari and Mirarab, 2016b) and branch length for all branches. Luckily, localPP and branch length both can be computed independently for all branches, allowing a trivial parallelization.
+
+\end{document}

@@ -20,12 +20,37 @@ import phylonet.tree.model.sti.STITreeCluster;
 import phylonet.tree.model.sti.STITreeCluster.Vertex;
 import phylonet.tree.util.Collapse;
 
-
-/***
- * Type T corresponds to a tripartition in ASTRAL
+/**
+ * Abstract base class for ASTRAL-MP phylogenetic inference implementations.
+ * 
+ * This class provides the core dynamic programming framework that implements the fundamental
+ * ASTRAL algorithm described in the research paper. The dynamic programming approach follows
+ * Equation 3 from the paper, which finds the species tree that maximizes the weighted quartet score:
+ * 
+ * Score(S) = Σ over all quartets q: w(q|G) * I(q, S)
+ * 
+ * where w(q|G) is the weight of quartet q given gene trees G (computed using Equations 1-2),
+ * and I(q, S) is an indicator function for whether quartet q is displayed in species tree S.
+ * 
+ * The algorithm constructs a search space X from bipartitions present in gene trees and uses
+ * dynamic programming to efficiently explore this exponentially large space. This approach makes
+ * the NP-hard problem of finding the optimal species tree tractable for datasets with hundreds
+ * of taxa.
+ * 
+ * Key components:
+ * - Dynamic programming over clusters (bottom-up tree construction)
+ * - Tripartition weight calculation for quartet scoring
+ * - Search space restriction using gene tree bipartitions
+ * - Support for both rooted and unrooted tree inference
+ * 
+ * This abstract class is extended by specific implementations like WQInferenceConsumer
+ * that add parallelization and optimization strategies described in Section 2.4 of the paper.
+ * 
+ * Type parameter T corresponds to tripartitions in ASTRAL - the fundamental unit for
+ * quartet-based scoring as described in Section 2.1 of the research paper.
+ * 
  * @author smirarab
- *
- * @param <T>
+ * @param <T> The tripartition type used for quartet scoring
  */
 
 public abstract class AbstractInference<T> implements Cloneable{
@@ -115,18 +140,61 @@ public abstract class AbstractInference<T> implements Cloneable{
 		Logging.log("Taxon occupancy: " + taxonOccupancy.toString());
 	}
 
-	/***
-	 * Scores a given tree. 
-	 * @param scorest
-	 * @param initialize
-	 * @return
+	/**
+	 * Scores a given species tree using the ASTRAL quartet-based scoring method.
+	 * 
+	 * This method implements the core scoring function from Equation 3 of the research paper:
+	 * Score(S) = Σ over all quartets q: w(q|G) * I(q, S)
+	 * 
+	 * For each quartet of taxa, it:
+	 * 1. Computes the quartet weight w(q|G) based on gene tree frequencies (Equations 1-2)
+	 * 2. Determines if the quartet topology is displayed in the species tree S (indicator I(q, S))
+	 * 3. Accumulates the weighted score across all possible quartets
+	 * 
+	 * The scoring process is essential for:
+	 * - Evaluating candidate species trees during dynamic programming
+	 * - Computing the final optimality score of the inferred tree
+	 * - Comparing alternative phylogenetic hypotheses
+	 * 
+	 * This abstract method is implemented by specific inference classes like WQInferenceConsumer
+	 * which may use parallelization strategies described in Section 2.4.1 of the paper.
+	 * 
+	 * @param scorest The species tree to score
+	 * @param initialize Whether to initialize data structures before scoring
+	 * @return The quartet-based score of the species tree
 	 */
 	public abstract double scoreSpeciesTreeWithGTLabels(Tree scorest, boolean initialize) ;
 
-	/***
-	 * This implements the dynamic programming algorithm
-	 * @param clusters
-	 * @return
+	/**
+	 * Core dynamic programming algorithm that implements the ASTRAL species tree inference method.
+	 * 
+	 * This method implements the fundamental dynamic programming approach described in the research paper
+	 * that efficiently searches the exponentially large space of possible species trees. The algorithm
+	 * follows these key steps from the paper:
+	 * 
+	 * 1. **Bottom-up Construction**: Starting from individual taxa, builds increasingly larger clusters
+	 *    by considering all valid combinations from the search space X
+	 * 
+	 * 2. **Optimal Substructure**: For each cluster C, computes the optimal score by considering all
+	 *    possible ways to partition C into two subclusters (C1, C2) and finding:
+	 *    Score(C) = max over all valid partitions: Score(C1) + Score(C2) + quartet_score(C1, C2, rest)
+	 * 
+	 * 3. **Search Space Restriction**: Only considers bipartitions present in the search space X,
+	 *    which is constructed from gene tree bipartitions plus heuristic additions. This restriction
+	 *    makes the NP-hard problem tractable while maintaining statistical consistency.
+	 * 
+	 * 4. **Quartet-based Scoring**: Uses tripartition weights (computed via Equations 1-2) to
+	 *    evaluate how well each potential species tree partition is supported by the gene trees.
+	 * 
+	 * The dynamic programming ensures that each subproblem is solved only once, achieving
+	 * polynomial-time complexity in the size of the search space X rather than exponential
+	 * complexity in the number of taxa.
+	 * 
+	 * This implementation supports the parallelization strategies described in Section 2.4.1,
+	 * where computation tasks can be distributed across multiple threads or compute units.
+	 * 
+	 * @param clusters The collection of clusters forming the search space X
+	 * @return List of optimal solutions (typically one, but may include ties)
 	 */
 	List<Solution> findTreesByDP(IClusterCollection clusters) {
 
@@ -134,9 +202,12 @@ public abstract class AbstractInference<T> implements Cloneable{
 
 		Logging.log("Size of largest cluster: " +all.getCluster().getClusterSize());
 
+		// Create and execute the main computation task for the root cluster
+		// This triggers the recursive dynamic programming computation
 		AbstractComputeMinCostTask<T> allTask = newComputeMinCostTask(this,all);
 		allTask.compute();
 		
+		// Extract the optimal solution from the computed results
 		List<Solution> solutions = processSolutions(all);
         
 		return (List<Solution>) (List<Solution>) solutions;
@@ -235,32 +306,73 @@ public abstract class AbstractInference<T> implements Cloneable{
 		this.setupMisc();
 	}
 	
-	/***
-	 * Creates the set X 
+	/**
+	 * Constructs the search space X that defines the set of bipartitions considered during inference.
+	 * 
+	 * This method implements the critical search space construction described in the research paper.
+	 * The search space X determines which bipartitions can be used to build species trees, directly
+	 * affecting both the computational complexity and the accuracy of the inference.
+	 * 
+	 * **Search Space Construction Strategy:**
+	 * 
+	 * 1. **Gene Tree Bipartitions**: Adds all bipartitions that appear in the input gene trees.
+	 *    This ensures that well-supported evolutionary relationships from individual genes
+	 *    are available for the species tree construction.
+	 * 
+	 * 2. **ASTRAL-II Heuristics**: Applies additional heuristic rules to expand the search space
+	 *    beyond just gene tree bipartitions. These heuristics help capture evolutionary
+	 *    relationships that may not appear in individual gene trees but are important
+	 *    for accurate species tree inference.
+	 * 
+	 * 3. **Optional Exact Solution**: When exact mode is enabled, adds all possible bipartitions,
+	 *    guaranteeing the globally optimal solution but with exponential computational cost.
+	 * 
+	 * 4. **Extra Tree Integration**: Incorporates bipartitions from additional reference trees
+	 *    if provided, allowing incorporation of prior phylogenetic knowledge.
+	 * 
+	 * 5. **Bipartition Removal**: Optionally removes bipartitions from specified trees,
+	 *    useful for comparative analyses or constraint-based inference.
+	 * 
+	 * **Statistical Properties:**
+	 * The restricted search space maintains the statistical consistency of ASTRAL while making
+	 * the NP-hard problem computationally tractable. The key insight is that the optimal
+	 * species tree typically uses bipartitions that appear in at least one gene tree.
+	 * 
+	 * **Computational Impact:**
+	 * The size of X directly determines the runtime complexity of the dynamic programming algorithm.
+	 * ASTRAL-MP's parallelization strategies (Section 2.4.1) become crucial when X is large.
+	 * 
+	 * @see Section 2.1 of the research paper for theoretical foundation
+	 * @see Section 2.4.1 for parallelization of search space exploration
 	 */
 	private void setupSearchSpace() {
 		long startTime = System.currentTimeMillis();
 
+		// Initialize taxon mapping and core data structures
 		mapNames();
 
 		dataCollection = newCounter(newClusterCollection());
 		weightCalculator = newWeightCalculator();
 
 		/**
-		 * Fors the set X by adding from gene trees and
-		 * by adding using ASTRAL-II hueristics
+		 * Primary search space construction: combines gene tree bipartitions
+		 * with ASTRAL-II heuristic additions to form the set X
 		 */
 		dataCollection.formSetX(this);
 		
 		
 
 		
+		// Optional exact solution mode: adds all possible bipartitions
+		// Guarantees global optimum but with exponential computational cost
 		if (options.isExactSolution()) {
 			Logging.log("calculating all possible bipartitions ...");
 		    dataCollection.addAllPossibleSubClusters(this.dataCollection.clusters.getTopVertex().getCluster());
 		}
 
 	      
+		// Incorporate bipartitions from additional reference trees
+		// Allows integration of prior phylogenetic knowledge
 		if (extraTrees != null && extraTrees.size() > 0) {		
 			Logging.log("calculating extra bipartitions from extra input trees ...");
 			dataCollection.addExtraBipartitionsByInput(extraTrees,options.isExtrarooted());
@@ -273,6 +385,8 @@ public abstract class AbstractInference<T> implements Cloneable{
 		}
 		
 		
+		// Remove bipartitions from specified trees if requested
+		// Useful for comparative analyses or constraint-based inference
 		if (toRemoveExtraTrees != null && toRemoveExtraTrees.size() > 0 && this.removeExtraTree) {		
 			Logging.log("Removing extra bipartitions from extra input trees ...");
 			dataCollection.removeExtraBipartitionsByInput(toRemoveExtraTrees,true);
@@ -285,6 +399,7 @@ public abstract class AbstractInference<T> implements Cloneable{
 		}
 		
 		
+		// Debug output: display the constructed search space X
 		if (this.options.isOutputSearchSpace()) {
 			for (Set<Vertex> s: dataCollection.clusters.getSubClusters()) {
 				for (Vertex v : s) {
@@ -312,7 +427,8 @@ public abstract class AbstractInference<T> implements Cloneable{
 	
 	public List<Solution> inferSpeciesTree() {
 		
-		List<Solution> solutions;				
+		List<Solution> solutions;		
+		
 		solutions = findTreesByDP(this.dataCollection.clusters);
 
 		return (List<Solution>) solutions;

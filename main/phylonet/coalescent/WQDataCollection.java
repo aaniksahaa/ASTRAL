@@ -33,10 +33,69 @@ import phylonet.tree.util.Trees;
 import phylonet.util.BitSet;
 
 /**
- * Sets up the set X
+ * Core data management class responsible for constructing and managing the search space X in ASTRAL-MP.
+ * 
+ * This class implements the critical search space construction algorithms described in the research paper,
+ * which determine the set of bipartitions that can be used during species tree inference. The search space X
+ * directly affects both the computational complexity and the accuracy of the ASTRAL algorithm.
+ * 
+ * **Primary Responsibilities:**
+ * 
+ * 1. **Search Space Construction (Set X)**: Implements the formSetX algorithm that combines:
+ *    - Bipartitions from input gene trees
+ *    - ASTRAL-II heuristic additions for improved accuracy
+ *    - Optional exact solutions (all possible bipartitions)
+ *    - Extra bipartitions from reference trees
+ * 
+ * 2. **Data Structure Management**: Maintains efficient representations of:
+ *    - Cluster collections for fast bipartition lookup
+ *    - Similarity matrices for heuristic computations
+ *    - Gene tree metadata and taxon mappings
+ *    - Tripartition weight computation support
+ * 
+ * 3. **Heuristic Enhancement**: Implements advanced ASTRAL-II heuristics including:
+ *    - Greedy consensus-based bipartition addition
+ *    - Distance-based similarity matrix construction
+ *    - Polytomy resolution strategies
+ *    - Frequency-based filtering of candidate bipartitions
+ * 
+ * **Mathematical Foundation:**
+ * The search space X construction follows the theoretical framework where:
+ * - X contains all bipartitions that appear in at least one gene tree
+ * - Additional heuristic bipartitions expand X to capture evolutionary relationships
+ *   not explicitly present in individual gene trees
+ * - The restricted search space maintains statistical consistency while achieving
+ *   polynomial-time complexity
+ * 
+ * **Performance Optimizations:**
+ * 
+ * 1. **Memory Efficiency**: Uses BitSet representations for fast set operations
+ * 2. **Parallel Processing**: Supports multithreaded bipartition addition
+ * 3. **Adaptive Thresholds**: Dynamically adjusts heuristic parameters based on dataset size
+ * 4. **Early Termination**: Implements stopping criteria to avoid redundant computations
+ * 
+ * **Integration with ASTRAL-MP Parallelization:**
+ * The data structures are designed to work efficiently with the parallelization strategies
+ * described in Section 2.4.1:
+ * - Thread-safe cluster collections for concurrent access
+ * - Efficient data distribution for GPU acceleration
+ * - Support for producer-consumer architectures
+ * 
+ * **Quality Control:**
+ * Implements several mechanisms to ensure search space quality:
+ * - Minimum frequency thresholds for bipartition inclusion
+ * - Ratio-based filtering to remove poorly supported bipartitions
+ * - Maximum polytomy size limits to control computational complexity
+ * - Gradient-based sampling for large polytomies
+ * 
+ * The class serves as the foundation for all downstream ASTRAL computations, ensuring that
+ * the dynamic programming algorithm has access to a well-constructed, statistically sound
+ * search space that balances computational efficiency with phylogenetic accuracy.
  * 
  * @author smirarab
- * 
+ * @see Section 2.1 for search space theory
+ * @see Section 2.4.1 for parallelization considerations
+ * @see ASTRAL-II paper for detailed heuristic descriptions
  */
 public class WQDataCollection extends AbstractDataCollection<Tripartition>
 implements Cloneable {
@@ -506,101 +565,10 @@ implements Cloneable {
 		return added;
 	}
 
-	// /***
-	// * Computes and adds partitions from the input set (ASTRAL-I)
-	// * Also, adds extra bipartitions using ASTRAL-II heuristics.
-	// * Takes care of multi-individual dataset subsampling.
-	// */
-	// @Override
-	// public void formSetX(AbstractInference<Tripartition> inf) {
-	//
-	// WQInference inference = (WQInference) inf;
-	// int haveMissing = preProcess(inference);
-	// SpeciesMapper spm = GlobalMaps.taxonNameMap.getSpeciesIdMapper();
-	//
-	// calculateDistances();
-	//
-	// if (haveMissing > 0 ) {
-	// completeGeneTrees();
-	// } else {
-	// this.completedGeeneTrees = this.originalInompleteGeneTrees;
-	// }
-	//
-	// /*
-	// * Calculate gene tree clusters and bipartitions for X
-	// */
-	// STITreeCluster all = GlobalMaps.taxonIdentifier.newCluster();
-	// all.getBitSet().set(0, GlobalMaps.taxonIdentifier.taxonCount());
-	// addToClusters(all, GlobalMaps.taxonIdentifier.taxonCount());
-	//
-	// Logging.log("Building set of clusters (X) from gene trees ");
-	//
-	//
-	// /**
-	// * This is where we randomly sample one individual per species
-	// * before performing the next steps in construction of the set X.
-	// */
-	// int maxRepeat =
-	// getSamplingRepeationFactor(inference.options.getSamplingrounds());
-	//
-	// if (maxRepeat > 1)
-	// Logging.log("Average  sampling is "+ spm.meanSampling() +
-	// ".\nWill do "+maxRepeat+" rounds of sampling ");
-	//
-	// //Logging.log(this.completedGeeneTrees.get(0));
-	// int prev = 0, firstgradiant = -1, gradiant = 0;
-	// for (int r = 0; r < maxRepeat; r++) {
-	//
-	// Logging.log("------------\n"
-	// + "Round " +r +" of individual  sampling ...");
-	// SingleIndividualSample taxonSample = new
-	// SingleIndividualSample(spm,this.geneMatrix);
-	//
-	// Logging.log("taxon sample " +
-	// Arrays.toString(taxonSample.getTaxonIdentifier().getAllTaxonNames()));
-	//
-	// List<Tree> contractedTrees =
-	// taxonSample.contractTrees(this.completedGeeneTrees);
-	//
-	// //Logging.log(trees.get(0));
-	//
-	// addBipartitionsFromSignleIndTreesToX(contractedTrees, taxonSample);
-	//
-	// Logging.log("Number of clusters after simple addition from gene trees: "
-	// + clusters.getClusterCount());
-	//
-	// if (inference.getAddExtra() != 0) {
-	// Logging.log("calculating extra bipartitions to be added at level "
-	// + inference.getAddExtra() +" ...");
-	// this.addExtraBipartitionByHeuristics(contractedTrees, taxonSample);
-	//
-	// Logging.log("Number of Clusters after addition by greedy: " +
-	// clusters.getClusterCount());
-	// gradiant = clusters.getClusterCount() - prev;
-	// prev = clusters.getClusterCount();
-	// if (firstgradiant == -1)
-	// firstgradiant = gradiant;
-	// else {
-	// //Logging.log("First gradiant: " + firstgradiant+
-	// " current gradiant: " + gradiant);
-	// if (gradiant < firstgradiant / 10) {
-	// //break;
-	// }
-	// }
-	//
-	// }
-	// }
-	// Logging.log();
-	//
-	// Logging.log("Number of Default Clusters: " +
-	// clusters.getClusterCount());
-	//
-	// }
-
 	/***
-	 * Computes and adds partitions from the input set (ASTRAL-I) Also, adds
-	 * extra bipartitions using ASTRAL-II heuristics. Takes care of
-	 * multi-individual dataset subsampling.
+	 * Computes and adds partitions from the input set (ASTRAL-I)
+	 * Also, adds extra bipartitions using ASTRAL-II heuristics.
+	 * Takes care of multi-individual dataset subsampling.
 	 */
 	@Override
 	public void formSetX(AbstractInference<Tripartition> inf) {
@@ -627,8 +595,8 @@ implements Cloneable {
 		Logging.logTimeMessage(" WQDataCollection 558-561: ");
 
 		/**
-		 * This is where we randomly sample one individual per species before
-		 * performing the next steps in construction of the set X.
+		 * This is where we randomly sample one individual per species
+		 * before performing the next steps in construction of the set X.
 		 */
 		//int firstRoundSampling = 400;
 

@@ -1,0 +1,42 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\begin{document}
+
+\title{Supplementary Materials for ASTRAL-MP}
+\author{Yin et al.}
+\date{2019/3/10}
+\maketitle
+
+\section*{Supplementary Algorithms}
+
+\begin{algorithm}
+\caption{Weight calculation}
+\label{alg:weight}
+\begin{algorithmic}[1]
+\Function{Weight}{$\mathcal{G}, X \mid Y \mid Z$}
+    \State \textbf{Input:} A set of gene trees $\mathcal{G}$ and a tripartition $X \mid Y \mid Z$. Each part (e.g., $X$) is a bitset indexed by the species; thus, $X(u)$ is 1 if leaf $u$ is in $X$ and otherwise is $0$. $G_3$ gives the set of all permutations of $\{1,2,3\}$.
+    \For{$g \in \mathcal{G}$}
+        \State $S \leftarrow$ empty stack
+        \For{$u \in$ \Call{postOrder}{$g$}}
+            \If{$u$ is a leaf}
+                \State $(x, y, z) \leftarrow (X[u], Y[u], Z[u])$
+            \Else
+                \State $(\mathbf{C}_{11}, \mathbf{C}_{12}, \mathbf{C}_{13}) \leftarrow$ pull from $S$
+                \State $(\mathbf{C}_{21}, \mathbf{C}_{22}, \mathbf{C}_{23}) \leftarrow$ pull from $S$
+                \State $(x, y, z) \leftarrow (\mathbf{C}_{11} + \mathbf{C}_{21}, \mathbf{C}_{12} + \mathbf{C}_{22}, \mathbf{C}_{13} + \mathbf{C}_{23})$
+                \State $(\mathbf{C}_{31}, \mathbf{C}_{32}, \mathbf{C}_{33}) \leftarrow (|X| - x, |Y| - y, |Z| - z)$
+                \State $w \leftarrow w + \frac{1}{2} \sum_{(a, b, c) \in G_3} \mathbf{C}_{1a} \mathbf{C}_{2b} \mathbf{C}_{3c} (\mathbf{C}_{1a} + \mathbf{C}_{3b} + \mathbf{C}_{3c} - \mathbf{C}_{3c})$
+            \EndIf
+            \State push $(x, y, z)$ to $S$
+        \EndFor
+    \EndFor
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}

@@ -56,7 +56,24 @@ import phylonet.tree.model.Tree;
 import phylonet.tree.model.sti.STITree;
 import phylonet.tree.util.Trees;
 
-
+/**
+ * ASTRAL-MP Command Line Interface
+ * 
+ * This class serves as the main entry point for ASTRAL-MP, implementing the command-line 
+ * interface for the ASTRAL species tree inference algorithm with multi-threading and GPU 
+ * parallelization capabilities.
+ * 
+ * ASTRAL-MP extends the original ASTRAL algorithm (described in Section 1 of the paper) 
+ * by introducing:
+ * 1. Multi-threaded CPU parallelization 
+ * 2. GPU parallelization using OpenCL
+ * 3. AVX2 vectorization for weight calculations
+ * 4. Randomized cluster partitioning algorithms
+ * 
+ * The algorithm finds the species tree that maximizes the weighted quartet score with 
+ * respect to the input gene trees, solving the optimization problem described in 
+ * Section 2.1 of the paper using dynamic programming.
+ */
 public class CommandLine {
 	protected static String _version = "5.15.5";
 	protected static SimpleJSAP jsap;
@@ -485,6 +502,22 @@ public class CommandLine {
 		return options;
 	}
 
+	/**
+	 * Main program entry point for ASTRAL-MP
+	 * 
+	 * This method orchestrates the entire ASTRAL-MP workflow:
+	 * 1. Parses command line arguments and sets up options
+	 * 2. Initializes native libraries for AVX2 acceleration (Section 2.4.1)
+	 * 3. Determines whether to run tree scoring or full inference
+	 * 4. Delegates to appropriate execution methods
+	 * 
+	 * The program can operate in two main modes:
+	 * - Tree scoring mode: evaluates provided species trees against gene trees
+	 * - Inference mode: performs full ASTRAL dynamic programming to find optimal tree
+	 * 
+	 * @param args Command line arguments specifying input files, output options, 
+	 *             parallelization settings, and algorithm parameters
+	 */
 	public static void main(String[] args) throws Exception {
 		try {
 		long startTime = System.currentTimeMillis();
@@ -495,12 +528,18 @@ public class CommandLine {
 		List<Tree> mainTrees = new ArrayList<Tree>();
 		List<List<String>> bootstrapInputSets = new ArrayList<List<String>>();
 		BufferedWriter outbuffer;
+		
+		// Print ASTRAL-MP header with version information
 		Logging.log("\n================== ASTRAL ===================== \n");
 		Logging.log("This is ASTRAL version " + _version);
+		
+		// Attempt to load native AVX2 library for vectorized weight calculations
+		// This corresponds to the AVX2 vectorization described in Section 2.4.1
 		try {
 			System.loadLibrary("Astral");
 			Logging.log("Using native AVX batch computing.");
 		} catch (Throwable e) {
+			// Fall back to pure Java implementation if native library unavailable
 			// e.printStackTrace();
 			Logging.log("Warning: \n Fail to load native library " + System.mapLibraryName("Astral")
 					+ "; use Java default computing method without AVX2, which is 4X slower. \n"
@@ -508,6 +547,8 @@ public class CommandLine {
 					+ System.mapLibraryName("Astral") + " can be found). \n"
 					+ " Trying running make.sh. For mode debugging, run: java -Djava.library.path=lib/ -jar native_library_tester.jar");
 		}
+		
+		// Parse command line arguments
 		jsap = getJSAP();
 		config = jsap.parse(args);
 		if (jsap.messagePrinted()) {
@@ -515,23 +556,37 @@ public class CommandLine {
 		}
 		
 		Logging.log("Gene trees are treated as " + (rooted ? "rooted" : "unrooted"));
+		
+		// Initialize random number generator with specified seed for reproducible results
 		GlobalMaps.random = new Random(config.getLong("seed"));
+		
+		// Read and validate all program options
 		Options options = readOptions( rooted, extrarooted, wh, config, mainTrees, bootstrapInputSets);
+		
+		// Set up output stream
 		File outfile = config.getFile("output file");
 		if (outfile == null) {
 			outbuffer = new BufferedWriter(new OutputStreamWriter(System.out));
 		} else {
 			outbuffer = new BufferedWriter(new FileWriter(outfile));
 		}
+		
+		// Determine the outgroup for rooting the final tree
 		String outgroup = GlobalMaps.taxonNameMap.getSpeciesIdMapper().getSpeciesName(0);
+		
+		// Branch execution based on mode: tree scoring vs. full inference
 		List<String> toScore = null;
 		if (config.getFile("score species trees") != null) {
+			// Tree scoring mode: evaluate provided species trees
 			Logging.log("Scoring " + config.getFile("score species trees"));
 			toScore = readTreeFileAsString(config.getFile("score species trees"));
 			runScore(rooted, mainTrees, outbuffer, options, outgroup, toScore);
 		} else {
+			// Full inference mode: run ASTRAL dynamic programming algorithm
 			runInference(config, rooted, extrarooted, mainTrees, outbuffer, bootstrapInputSets, options, outgroup);
 		}
+		
+		// Report total execution time and clean up threading resources
 		Logging.log("ASTRAL finished in " + (System.currentTimeMillis() - startTime) / 1000.0D + " secs");
 		Threading.shutdown();
 		} catch (Exception e) {
@@ -575,10 +630,32 @@ public class CommandLine {
 		outbuffer.close();
 	}
 
+	/**
+	 * Executes the main ASTRAL inference algorithm
+	 * 
+	 * This method implements the complete ASTRAL-MP workflow described in the paper:
+	 * 1. Sets up extra trees for enriching the search space X
+	 * 2. Performs bootstrap analysis if requested
+	 * 3. Runs the main dynamic programming inference (Section 2.1)
+	 * 
+	 * The inference process uses the parallelized architecture described in Section 2.4,
+	 * with producer-consumer threads for weight calculation and GPU acceleration when available.
+	 * 
+	 * @param config Command line configuration
+	 * @param rooted Whether gene trees are rooted
+	 * @param extrarooted Whether extra trees are rooted  
+	 * @param mainTrees Input gene trees
+	 * @param outbuffer Output writer
+	 * @param bootstrapInputSets Bootstrap replicate data
+	 * @param options Algorithm options and parameters
+	 * @param outgroup Outgroup taxon for rooting
+	 */
 	private static void runInference(JSAPResult config, boolean rooted, boolean extrarooted,
 			List<Tree> mainTrees, BufferedWriter outbuffer, List<List<String>> bootstrapInputSets, Options options,
 			String outgroup) throws JSAPException, IOException, FileNotFoundException {
 		Logging.log("All output trees will be *arbitrarily* rooted at " + outgroup);
+		
+		// Initialize containers for extra trees that enrich the search space X
 		List<Tree> extraTrees = new ArrayList<Tree>();
 		List<Tree> toRemoveExtraTrees = new ArrayList<Tree>();
 		try {
@@ -628,16 +705,46 @@ public class CommandLine {
 		outbuffer.close();
 	}
 
+	/**
+	 * Executes a single inference run with the specified input
+	 * 
+	 * This method encapsulates the core ASTRAL-MP algorithm execution:
+	 * 1. Creates a WQInferenceConsumer instance implementing the parallelized algorithm
+	 * 2. Sets up data structures and initializes the search space X
+	 * 3. Runs the dynamic programming inference (Equation 3 from the paper)
+	 * 4. Processes and outputs the optimal solution
+	 * 
+	 * The inference uses the producer-consumer architecture described in Section 2.4.1
+	 * for parallel weight calculation and the randomized cluster partitioning from Section 2.3.
+	 * 
+	 * @param extraTrees Additional trees for enriching search space
+	 * @param toRemoveExtraTrees Trees whose bipartitions should be removed from search space
+	 * @param outbuffer Output writer
+	 * @param input Input gene trees
+	 * @param bootstraps Bootstrap trees for support calculation
+	 * @param outgroup Outgroup for rooting
+	 * @param options Algorithm options
+	 * @return The inferred species tree
+	 */
 	private static Tree runOnOneInput(List<Tree> extraTrees, List<Tree> toRemoveExtraTrees,
 			BufferedWriter outbuffer, List<Tree> input, Iterable<Tree> bootstraps, String outgroup, Options options) {
 		long startTime;
 		startTime = System.currentTimeMillis();
-		AbstractInference inferenceConsumer = new WQInferenceConsumer(options, input, extraTrees, toRemoveExtraTrees);//(input, extraTrees, toRemoveExtraTrees, options);
+		
+		// Create the main inference engine with parallelization support
+		AbstractInference inferenceConsumer = new WQInferenceConsumer(options, input, extraTrees, toRemoveExtraTrees);
+		
+		// Initialize data structures: build search space X, set up weight calculators
 		inferenceConsumer.setup();
+		
+		// Execute the main dynamic programming algorithm (Section 2.1, Equation 3)
 		List<Solution> solutions = inferenceConsumer.inferSpeciesTree();
+		
 		Logging.logTimeMessage(" CommandLine 667: ");
 		Logging.log("Optimal tree inferred in " + (System.currentTimeMillis() - startTime) / 1000.0D + " secs.");
 		Logging.log("Weight calculation using polytrees cumulatively took " + Polytree.time / 1000000000.0D + " secs");
+		
+		// Process the optimal solution and compute branch support
 		Tree st = processSolution(outbuffer, bootstraps, outgroup, inferenceConsumer, solutions);
 		return st;
 	}

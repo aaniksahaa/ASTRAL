@@ -28,13 +28,41 @@ import phylonet.tree.model.sti.STITreeCluster;
 import phylonet.tree.model.sti.STITreeCluster.Vertex;
 import phylonet.util.BitSet;
 
-
-
+/**
+ * ASTRAL-MP Weighted Quartet Inference Consumer
+ * 
+ * This class implements the consumer side of the parallelized ASTRAL algorithm described 
+ * in Section 2.4.1 of the paper. It serves as the main orchestrator for the weighted quartet 
+ * (WQ) inference process that finds the species tree maximizing quartet agreement.
+ * 
+ * Key responsibilities:
+ * 1. Implements the weighted quartet scoring function (Section 2.1, Equations 1-2)
+ * 2. Coordinates the producer-consumer parallelization architecture (Figure 2)
+ * 3. Manages the dynamic programming recursion (Equation 3)
+ * 4. Computes maximum possible scores for normalization
+ * 5. Handles multi-individual sampling and incomplete lineage sorting
+ * 
+ * The class extends AbstractInference with Tripartition as the template parameter,
+ * representing the fundamental unit of computation in ASTRAL (tripartitions corresponding
+ * to internal nodes in species trees).
+ */
 public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 
 	int forceAlg = -1;
 	long maxpossible;
 
+	/**
+	 * Constructor for the ASTRAL-MP inference consumer
+	 * 
+	 * Initializes the parallelized inference engine with the specified input trees
+	 * and configuration options. Sets up the producer-consumer queues described in
+	 * Section 2.4.1 for parallel weight calculation.
+	 * 
+	 * @param inOptions Algorithm configuration and parallelization settings
+	 * @param trees Input gene trees
+	 * @param extraTrees Additional trees for enriching search space X
+	 * @param toRemoveExtraTrees Trees whose bipartitions should be excluded from X
+	 */
 	public WQInferenceConsumer(Options inOptions, List<Tree> trees, List<Tree> extraTrees, List<Tree> toRemoveExtraTrees) {
 		super(inOptions, trees, extraTrees, toRemoveExtraTrees);
 		this.setQueueWeightResults(new LinkedBlockingQueue<Long>());
@@ -45,10 +73,21 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 
 
 	/**
-	 * Calculates maximum possible score, to be used for normalization.
-	 * @return
+	 * Calculates maximum possible quartet score for normalization
+	 * 
+	 * This method computes the theoretical maximum quartet score that could be achieved
+	 * if all quartet trees induced by gene trees were consistent with the species tree.
+	 * This value is used for normalizing the final quartet score as described in the paper.
+	 * 
+	 * The calculation accounts for:
+	 * - Quartets that cannot be resolved due to missing data
+	 * - Unresolvable quartets in multi-individual datasets
+	 * - The polytree-based efficient computation when available
+	 * 
+	 * @return Maximum possible quartet score for the given input
 	 */
 	long calculateMaxPossible() {
+		// Use polytree-based calculation if available for efficiency
 		if (weightCalculator instanceof WQWeightCalculator
 				&& ((WQWeightCalculator)weightCalculator).algorithm instanceof WQWeightCalculator.CondensedTraversalWeightCalculator){
 			return ((WQWeightCalculator.CondensedTraversalWeightCalculator)
@@ -56,6 +95,7 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 					- unresolvableQuartets();
 		}
 
+		// Fallback computation by traversing gene trees directly
 		//TODO: MUTIND: In the multi individual case, some quartets can never be satisfied. 
 		//      We should compute their number and substract that from maxpossible here. 
 		long weight = 0;
@@ -113,6 +153,16 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 	}
 
 
+	/**
+	 * Computes the number of quartet trees that cannot be resolved
+	 * 
+	 * In multi-individual datasets where multiple individuals represent the same species,
+	 * some quartet trees can never agree with any species tree due to the constraint that
+	 * all individuals from the same species must form a monophyletic group. This method
+	 * counts such unresolvable quartets to be subtracted from the maximum possible score.
+	 * 
+	 * @return Number of unresolvable quartet trees
+	 */
 	private long unresolvableQuartets() {
 		if (GlobalMaps.taxonNameMap.getSpeciesIdMapper().isSingleIndividual())
 			return 0;
@@ -121,6 +171,8 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 		long three = 0;
 		Iterator<Tree> ti = this.trees.iterator();
 		System.err.print("Counting unresolvable quartets ... ");
+		
+		// Iterate through each gene tree to count unresolvable quartets
 		for (STITreeCluster gtCL : ((WQDataCollection)this.dataCollection).treeAllClusters) {
 			
 			long[] counts = new long [GlobalMaps.taxonNameMap.getSpeciesIdMapper().getSpeciesCount()]; // number of inds of each species
@@ -132,6 +184,7 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 	        
 	        Tree t = ti.next();
 	        
+	        // Count quartets formed by multiple individuals from the same species
 	        for (Long count: counts) {  
 				
 				// First compute how many quartets there are from single inds
@@ -202,31 +255,59 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 	}
 
 	@Override
+	/**
+	 * Initializes the weight calculator for tripartition scoring
+	 * 
+	 * This method sets up the weight calculation system that implements Equations 1-2 from
+	 * the paper. It configures either the polytree-based algorithm (default) or the 
+	 * alternative set-based algorithm for computing tripartition weights.
+	 * 
+	 * The weight calculator is responsible for efficiently computing w(P) values for
+	 * tripartitions P = A1|A2|A3, which represent the quartet score contribution of
+	 * each internal node in potential species trees.
+	 */
 	void initializeWeightCalculator() {
+		// Configure the gene tree representation for efficient weight calculation
 		((WQWeightCalculator)this.weightCalculator).setupGeneTrees(this);
+		
+		// Force alternative algorithm if specified (primarily for testing/comparison)
 		if (this.forceAlg == 2) {
 			((WQWeightCalculator)this.weightCalculator).useSetWeightsAlgorithm();
 		} 
 
+		// Initialize weight storage container with estimated capacity
 		this.weightCalculator.initializeWeightContainer(
 				this.trees.size() *  GlobalMaps.taxonIdentifier.taxonCount() * 2);
 	}
 
 	/**
-	 * This method first computes the quartet scores and then calls
-	 * scoreBranches to annotate branches (if needed). 
-	 * The method assumes the input tree st has labels of individuals (not species). 
+	 * Scores a given species tree against the input gene trees
+	 * 
+	 * This method implements the quartet scoring described in Section 2.1. It computes
+	 * the weighted quartet score of a species tree by:
+	 * 1. Traversing the tree in post-order to identify all tripartitions
+	 * 2. Computing weights for each tripartition using Equations 1-2
+	 * 3. Parallelizing weight calculations using the producer-consumer architecture
+	 * 4. Summing all weights to get the total quartet score
+	 * 
+	 * The method assumes the input tree has individual labels (not species labels) and
+	 * optionally computes branch annotations like local posterior probabilities.
+	 * 
+	 * @param st The species tree to score
+	 * @param initialize Whether to initialize data structures (set to true for standalone scoring)
+	 * @return The normalized quartet score or branch support measure
 	 */
 	public double scoreSpeciesTreeWithGTLabels(Tree st, boolean initialize) {
 
 		if (initialize) {
+			// Initialize data structures for standalone tree scoring
 			mapNames();
 
 			IClusterCollection clusters = newClusterCollection();
 
-
 			this.dataCollection = newCounter(clusters);
 			weightCalculator = newWeightCalculator();
+			// Disable threading for simpler scoring workflow
 			((WQWeightCalculator)weightCalculator).setThreadingOff(true);
 
 			WQDataCollection wqDataCollection = (WQDataCollection) this.dataCollection;
@@ -234,21 +315,27 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 			this.initializeWeightCalculator();			
 			//ASTRAL IV SPECIFIC
 
+			// Calculate maximum possible score for normalization
 			this.maxpossible = this.calculateMaxPossible();
 			Logging.log("Number of quartet trees in the gene trees: "+this.maxpossible);
 
 			//Logging.log(this.maxpossible);
 		}
 
+		// Disable threading for tree scoring mode
 		((WQWeightCalculator)weightCalculator).setThreadingOff(true);
 		Stack<STITreeCluster> stack = new Stack<STITreeCluster>();
 
+		// Containers for parallel weight calculation
 		List<Future<Long[]>> weights = new ArrayList<Future<Long[]>>();
 		boolean poly = false;
 		final Tripartition [] tripartitionBatch = new Tripartition[Polytree.PTNative.batchSize];
 		int batchPosition = 0;
+		
+		// Post-order traversal to identify all tripartitions in the species tree
 		for (TNode node: st.postTraverse()) {
 			if (node.isLeaf()) {
+				// Process leaf nodes: create singleton clusters
 				String nodeName = node.getName(); //GlobalMaps.TaxonNameMap.getSpeciesName(node.getName());
 
 				STITreeCluster cluster = GlobalMaps.taxonIdentifier.newCluster();
@@ -258,6 +345,7 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 				stack.add(cluster);
 
 			} else {
+				// Process internal nodes: create tripartitions for quartet scoring
 				ArrayList<STITreeCluster> childbslist = new ArrayList<STITreeCluster>();
 				BitSet bs = new BitSet(GlobalMaps.taxonIdentifier.taxonCount());
 				for (TNode child: node.getChildren()) {
@@ -272,11 +360,13 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 				//((STINode)node).setData(new GeneTreeBitset(node.isRoot()? -2: -1));
 				stack.add(cluster);
 
-
+				// Add the complementary cluster (taxa not in this subtree)
 				STITreeCluster remaining = cluster.complementaryCluster();
 				if (remaining.getClusterSize() != 0) {
 					childbslist.add(remaining);
 				}
+				
+				// Handle polytomies (nodes with more than 2 children)
 				if (childbslist.size() > 3) {
 					/*for (STITreeCluster chid :childbslist) {
 						System.err.print(chid.getClusterSize()+" ");
@@ -288,12 +378,15 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 					}
 				}
 
+				// Generate all tripartitions for this internal node
+				// Each tripartition corresponds to a way of selecting 3 groups from the children
 				for (int i = 0; i < childbslist.size(); i++) {
 					for (int j = i+1; j < childbslist.size(); j++) {
 						for (int k = j+1; k < childbslist.size(); k++) {
 							final Tripartition trip = new Tripartition(childbslist.get(i),  childbslist.get(j), childbslist.get(k));
 							tripartitionBatch[batchPosition++] = trip;
 							
+							// Submit batch for parallel weight calculation when full
 							if (batchPosition == tripartitionBatch.length) {
 								Future<Long[]> s = Threading.submit(new Callable<Long[]>() {
 	
@@ -313,6 +406,8 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 			}
 			
 		}
+		
+		// Handle final partial batch if any tripartitions remain
 		if (batchPosition != 0) {
 			
 			final Tripartition[] tripartitionlastBatch = Arrays.copyOfRange(tripartitionBatch, 0, batchPosition);
@@ -328,6 +423,7 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 			weights.add(s);
 		}
 		
+		// Collect and sum all computed weights to get the total quartet score
 		long sum = 0l;
 		for (Future<Long[]> ws: weights) {
 			try {
@@ -341,6 +437,7 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 
 		Logging.logTimeMessage("WQInference 180: ");
 		
+		// Report final scores (raw and normalized)
 		if (poly) {
 			Logging.log("Final quartet score is: won't report because of the existense of polytomies and to save time. "
 					+ "To get the score run with -t 1 and you can score the tree below using -q. ");
@@ -353,6 +450,7 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 			//System.out.println(st.toNewickWD());
 		}
 
+		// Compute branch annotations if requested
 		if (this.getBranchAnnotation() == 0){
 			for (TNode n: st.postTraverse()) {
 				((STINode) n).setData(null);
