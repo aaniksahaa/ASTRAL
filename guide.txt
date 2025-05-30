@@ -1,0 +1,147 @@
+# ASTRAL-MP Codebase Reading Guide
+
+Welcome to the ASTRAL-MP codebase! This guide provides an optimal reading sequence to help you understand how the theoretical concepts from the research paper translate into working code. The recommended flow builds understanding progressively, from high-level architecture to detailed implementations.
+
+## 📋 Preparation: Start with the Paper
+
+Before diving into code, familiarize yourself with:
+- **Section 1**: ASTRAL algorithm overview and quartet-based scoring
+- **Section 2.1**: Dynamic programming formulation (Equations 1-3)
+- **Section 2.4**: Parallelization strategies (producer-consumer architecture, GPU acceleration)
+
+## 🎯 Phase 1: Understanding the Foundation (High-Level Architecture)
+
+### 1. `CommandLine.java` - The Entry Point
+**Why start here:** This is where everything begins. It shows the complete program workflow and how different components connect.
+
+**Key insights:**
+- Main program structure and initialization
+- How GPU detection and threading setup work
+- The distinction between scoring mode vs. full inference mode
+- Command-line options that control algorithm behavior
+
+**Focus on:** The `main()` method, `runInference()`, and `runOnOneInput()` methods to understand the overall execution flow.
+
+---
+
+### 2. `AbstractInference.java` - The Algorithmic Framework
+**Why read next:** This abstract class defines the core ASTRAL algorithm structure that all implementations follow.
+
+**Key insights:**
+- The dynamic programming framework from Section 2.1
+- How the search space X is constructed (`setupSearchSpace()`)
+- The main inference loop (`findTreesByDP()`)
+- Interface definitions for weight calculation and data collection
+
+**Focus on:** Comments explaining the dynamic programming approach and how it connects to Equation 3 from the paper.
+
+---
+
+## 🔧 Phase 2: Core Algorithm Implementation
+
+### 3. `WQInferenceConsumer.java` - The Main Algorithm Engine
+**Why crucial:** This implements the "consumer" side of the parallelization architecture and contains the core ASTRAL-MP algorithm.
+
+**Key insights:**
+- How the producer-consumer parallelization works (Section 2.4.1)
+- Implementation of quartet-based tree scoring
+- Branch support calculation and tree annotation
+- Multi-threading coordination
+
+**Focus on:** The class documentation and `scoreSpeciesTreeWithGTLabels()` method to understand how quartet scoring works.
+
+---
+
+### 4. `WQInferenceProducer.java` - The Parallelization Producer
+**Why read after consumer:** Understanding the consumer first makes the producer's role clearer.
+
+**Key insights:**
+- How tripartitions are generated for parallel processing
+- The producer-consumer coordination mechanism
+- Queue management for efficient parallel processing
+
+**Focus on:** How this class works in tandem with the consumer to enable parallelization.
+
+---
+
+## 📊 Phase 3: Data Structures and Weight Calculation
+
+### 5. `WQDataCollection.java` - Search Space Construction
+**Why important:** This implements the critical search space X construction that makes ASTRAL tractable.
+
+**Key insights:**
+- How gene tree bipartitions are collected into set X
+- ASTRAL-II and ASTRAL-III heuristics for enriching the search space
+- Multi-individual dataset handling
+- Greedy consensus tree construction
+
+**Focus on:** The `formSetX()` method and how it builds the search space from gene trees.
+
+---
+
+### 6. `WQWeightCalculator.java` - Weight Computation Core
+**Why essential:** This implements Equations 1-2 from the paper - the mathematical heart of ASTRAL.
+
+**Key insights:**
+- Multiple weight calculation algorithms (polytree vs. traditional)
+- The F function implementation for quartet scoring
+- Memory-efficient representations from ASTRAL-III
+- How tripartition weights are computed
+
+**Focus on:** The algorithm classes and their `calculateWeight()` methods, especially how they implement the mathematical formulas.
+
+---
+
+## ⚡ Phase 4: Performance Optimizations
+
+### 7. `calculateWeight.cl` - GPU Acceleration
+**Why fascinating:** This shows how the algorithm translates to parallel GPU execution.
+
+**Key insights:**
+- OpenCL kernel implementation for GPU parallelization
+- How the weight calculation algorithm adapts to SIMD execution
+- Memory management on GPU devices
+- The F and FF functions in parallel context
+
+**Focus on:** How the sequential weight calculation algorithm becomes parallel, and the memory access patterns.
+
+---
+
+## 🎯 Phase 5: Putting It All Together
+
+### 8. Review Integration Points
+After reading all components, revisit these key integration points:
+
+**CommandLine.java:**
+- How all components are instantiated and coordinated
+- The flow from input parsing to final tree output
+
+**AbstractInference.java:**
+- How the abstract framework ties all concrete implementations together
+- The setup process and how data flows between components
+
+**Threading and Queues:**
+- How producer-consumer coordination works across the codebase
+- Queue management and synchronization mechanisms
+
+---
+
+## 🔍 Understanding Verification
+
+After completing this reading sequence, you should be able to:
+
+1. **Trace the algorithm flow** from gene tree input to species tree output
+2. **Understand the parallelization** and how it improves performance
+3. **Connect code sections** to specific equations and concepts in the paper
+4. **Identify key data structures** and their roles in the algorithm
+5. **Appreciate the optimizations** that make large-scale analysis possible
+
+## 💡 Tips for Success
+
+- **Take notes** connecting code sections to paper sections as you read
+- **Follow the comments** - they explicitly link code to paper concepts
+- **Don't worry about every detail** on first pass - focus on understanding the big picture
+- **Refer back to the paper** when encountering complex mathematical implementations
+- **Use the code structure** (class hierarchies, interfaces) to understand design decisions
+
+This reading order ensures you build understanding incrementally, starting with the overall architecture and progressively diving into implementation details. Each phase builds on the previous one, making the complex algorithm more approachable and understandable.
