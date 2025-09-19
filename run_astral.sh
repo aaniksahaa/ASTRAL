@@ -2,7 +2,10 @@
 
 # ASTRAL Runner Script
 # This script runs ASTRAL using compiled Java classes with absolute paths
+# give all absolute paths 
 # Usage: ./run_astral.sh -i input_file.tre [-o output_file.tre] [other_options]
+
+# ./run_astral.sh -i ../inputs/in200.tr -o ../out.tr
 
 # Define ASTRAL root directory (absolute path)
 ASTRAL_ROOT="/home/aaniksahaa/research/ASTRAL"
