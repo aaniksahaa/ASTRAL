@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # ASTRAL Runner Script
-# This script runs ASTRAL using compiled Java classes with absolute paths
-# give all absolute paths 
+# This script runs ASTRAL using relative paths from the current directory
+# NOTE: This script must be run from the ASTRAL root directory
 # Usage: ./run_astral.sh -i input_file.tre [-o output_file.tre] [other_options]
 
-# ./run_astral.sh -i ../inputs/in200.tr -o ../out.tr
+# ./run_astral.sh -i ../inputs/in200.tr -o ./out.tr
 
-# Define ASTRAL root directory (absolute path)
-ASTRAL_ROOT="/home/aaniksahaa/research/ASTRAL"
+# Define ASTRAL root directory (current working directory)
+ASTRAL_ROOT=$(pwd)
 
 # Define paths based on ASTRAL_ROOT
 MAIN_DIR="${ASTRAL_ROOT}/main"
@@ -54,9 +54,9 @@ if [ $# -eq 0 ]; then
     echo "  -t N       Branch annotation level (0-4, 8, 10, 16, 32)"
     echo ""
     echo "Examples:"
-    echo "  $0 -i /path/to/gene_trees.tre -o /path/to/species_tree.tre"
-    echo "  $0 -i /path/to/gene_trees.tre -o /path/to/species_tree.tre -C"
-    echo "  $0 -i /path/to/gene_trees.tre -o /path/to/species_tree.tre -T 8 -G 1"
+    echo "  $0 -i inputs/in200.tr -o out.tr"
+    echo "  $0 -i inputs/gene_trees.tre -o species_tree.tre -C"
+    echo "  $0 -i inputs/gene_trees.tre -o species_tree.tre -T 8 -G 1"
     echo ""
     exit 0
 fi
