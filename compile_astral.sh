@@ -5,7 +5,7 @@
 # Usage: ./compile_astral.sh
 
 # Define ASTRAL root directory (absolute path)
-ASTRAL_ROOT="/home/aaniksahaa/research/ASTRAL"
+ASTRAL_ROOT=$(pwd)
 
 # Define paths based on ASTRAL_ROOT
 MAIN_DIR="${ASTRAL_ROOT}/main"
