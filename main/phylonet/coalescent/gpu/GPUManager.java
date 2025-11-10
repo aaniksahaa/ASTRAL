@@ -42,7 +42,12 @@ public class GPUManager {
      * Initialize GPU support with robust fallback mechanism
      */
     public static boolean initializeGPU(boolean cpuOnly, String gpuSelection) {
+        Logging.log("=== Enhanced GPUManager.initializeGPU() called ===");
+        Logging.log("CPU-only mode: " + cpuOnly);
+        Logging.log("GPU selection: " + gpuSelection);
+        
         if (initialized) {
+            Logging.log("GPU already initialized, current backend: " + currentBackend);
             return currentBackend != GPUBackend.CPU_ONLY;
         }
         
@@ -212,9 +217,13 @@ public class GPUManager {
             
         } catch (Exception e) {
             lastError = "JOCL/OpenCL initialization failed: " + e.getMessage();
+            Logging.log("OpenCL Exception: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            e.printStackTrace();
             return false;
         } catch (Error e) {
             lastError = "JOCL/OpenCL initialization error: " + e.getMessage();
+            Logging.log("OpenCL Error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            e.printStackTrace();
             return false;
         }
     }
