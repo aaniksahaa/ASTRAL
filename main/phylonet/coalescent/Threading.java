@@ -55,4 +55,37 @@ public class Threading {
 	static void setDistMatrixChunkSize(int chunks) {
 		distMatrixChunks  = chunks;
 	}
+	
+	// Public accessors for GPU manager
+	public static cl_context_properties getContextProperties() {
+		return contextProperties;
+	}
+	
+	public static void setContextProperties(cl_context_properties props) {
+		contextProperties = props;
+	}
+	
+	public static cl_context[] getContext() {
+		return context;
+	}
+	
+	public static void setContext(cl_context[] ctx) {
+		context = ctx;
+	}
+	
+	public static cl_device_id[] getUsedDevices() {
+		return usedDevices;
+	}
+	
+	public static void setUsedDevices(cl_device_id[] devices) {
+		usedDevices = devices;
+	}
+	
+	public static String[] getDeviceVendors() {
+		return deviceVendors;
+	}
+	
+	public static void setDeviceVendors(String[] vendors) {
+		deviceVendors = vendors;
+	}
 }
