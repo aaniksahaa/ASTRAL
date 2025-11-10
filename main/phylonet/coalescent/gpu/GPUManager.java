@@ -232,8 +232,8 @@ public class GPUManager {
      * Set up library paths to help OpenCL discovery
      */
     private static void setupOpenCLLibraryPaths() {
-        // Common OpenCL library locations
-        String[] possiblePaths = {
+        // System OpenCL library locations (prioritize system libraries over bundled ones)
+        String[] systemPaths = {
             "/usr/lib/x86_64-linux-gnu",
             "/usr/lib64",
             "/usr/local/lib",
@@ -245,21 +245,37 @@ public class GPUManager {
         // Get current library path
         String currentPath = System.getProperty("java.library.path", "");
         
-        // Add common OpenCL paths
-        StringBuilder newPath = new StringBuilder(currentPath);
-        for (String path : possiblePaths) {
-            if (!currentPath.contains(path)) {
-                if (newPath.length() > 0) {
-                    newPath.append(":");
-                }
-                newPath.append(path);
+        // Build new path with system libraries first (higher priority)
+        StringBuilder newPath = new StringBuilder();
+        
+        // Add system paths first
+        for (String path : systemPaths) {
+            if (newPath.length() > 0) {
+                newPath.append(":");
             }
+            newPath.append(path);
+        }
+        
+        // Add current path (including bundled libraries) after system paths
+        if (!currentPath.isEmpty()) {
+            newPath.append(":").append(currentPath);
         }
         
         // Update library path
         System.setProperty("java.library.path", newPath.toString());
         
-        Logging.log("Enhanced library path: " + newPath.toString());
+        Logging.log("Enhanced library path (system libraries prioritized): " + newPath.toString());
+        
+        // Also try to force reload of native libraries
+        try {
+            // Clear any cached library mappings
+            java.lang.reflect.Field fieldSysPath = ClassLoader.class.getDeclaredField("sys_paths");
+            fieldSysPath.setAccessible(true);
+            fieldSysPath.set(null, null);
+            Logging.log("Native library cache cleared for fresh loading");
+        } catch (Exception e) {
+            Logging.log("Could not clear native library cache: " + e.getMessage());
+        }
     }
     
     /**
