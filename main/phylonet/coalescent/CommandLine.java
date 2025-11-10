@@ -40,6 +40,7 @@ import org.jocl.cl_device_id;
 import org.jocl.cl_platform_id;
 
 import phylonet.coalescent.gpu.GPUManager;
+import phylonet.coalescent.gpu.JNAGPUManager;
 
 import com.martiansoftware.jsap.FlaggedOption;
 import com.martiansoftware.jsap.JSAP;
@@ -209,18 +210,29 @@ public class CommandLine {
 					: config.getFile("output file").getCanonicalPath();
 		}
 
-		// Initialize GPU with robust fallback mechanism
-		boolean gpuInitialized = GPUManager.initializeGPU(
+		// Try JNA-based GPU first (Stelar-style, hassle-free)
+		boolean gpuInitialized = JNAGPUManager.initializeGPU(
 			config.getBoolean("cpu only"), 
 			config.getString("GPU")
 		);
 		
 		if (gpuInitialized) {
-			Logging.log("GPU acceleration enabled using " + GPUManager.getCurrentBackend() + " backend");
+			Logging.log("GPU acceleration enabled using " + JNAGPUManager.getCurrentBackend() + " backend (Stelar-style)");
 		} else {
-			Logging.log("GPU acceleration disabled - using CPU-only computation");
-			if (!GPUManager.getLastError().isEmpty()) {
-				Logging.log("GPU initialization details: " + GPUManager.getLastError());
+			Logging.log("JNA GPU not available, trying JOCL fallback...");
+			
+			// Fallback to JOCL if JNA fails
+			gpuInitialized = GPUManager.initializeGPU(
+				config.getBoolean("cpu only"), 
+				config.getString("GPU")
+			);
+			
+			if (gpuInitialized) {
+				Logging.log("GPU acceleration enabled using " + GPUManager.getCurrentBackend() + " backend (JOCL fallback)");
+			} else {
+				Logging.log("GPU acceleration disabled - using CPU-only computation");
+				Logging.log("JNA GPU details: " + JNAGPUManager.getLastError());
+				Logging.log("JOCL GPU details: " + GPUManager.getLastError());
 			}
 		}
 		int numThreads = config.getInt("cpu threads");
