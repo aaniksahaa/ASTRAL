@@ -157,10 +157,23 @@ public class JNAGPUManager {
      * Set up library paths for JNA (Stelar-style)
      */
     private static void setupJNALibraryPaths() {
+        // Get the ASTRAL root directory (go up from main directory)
+        String currentDir = System.getProperty("user.dir");
+        String astralRoot;
+        
+        if (currentDir.endsWith("/main")) {
+            astralRoot = currentDir.substring(0, currentDir.length() - 5); // Remove "/main"
+        } else {
+            astralRoot = currentDir;
+        }
+        
         String[] possiblePaths = {
-            System.getProperty("user.dir") + "/cuda",
-            System.getProperty("user.dir") + "/lib",
-            System.getProperty("user.dir") + "/lib-enhanced",
+            astralRoot + "/cuda",
+            astralRoot + "/lib",
+            astralRoot + "/lib-enhanced",
+            currentDir + "/cuda",
+            currentDir + "/lib",
+            currentDir + "/lib-enhanced",
             "/usr/local/cuda/lib64",
             "/opt/cuda/lib64",
             "/usr/lib/x86_64-linux-gnu",
@@ -179,6 +192,7 @@ public class JNAGPUManager {
         System.setProperty("jna.library.path", jnaPath.toString());
         System.setProperty("jna.platform.library.path", jnaPath.toString());
         
+        Logging.log("ASTRAL root detected: " + astralRoot);
         Logging.log("JNA library path: " + jnaPath.toString());
     }
     
