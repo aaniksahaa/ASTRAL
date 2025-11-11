@@ -1,0 +1,44 @@
+# Docker ignore file for ASTRAL
+# This prevents unnecessary files from being copied into the Docker image
+
+# Git files
+.git
+.gitignore
+
+# Docker files (don't copy into image)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Build artifacts that will be rebuilt in container
+target/
+*.class
+
+# Log files
+*.log
+hs_err_pid*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Large test data that might not be needed
+# (uncomment if you want to exclude)
+# test_data/
+# main/test_data/
+
+# Output files from previous runs
+out.tr
+output_absolute.tre
+*.tre.backup

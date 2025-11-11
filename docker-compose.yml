@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  astral:
+    build: .
+    image: astral:latest
+    container_name: astral-container
+    
+    # Mount volumes for input/output
+    volumes:
+      - ./inputs:/astral/inputs:ro          # Input files (read-only)
+      - ./outputs:/astral/outputs:rw        # Output files (read-write)
+      - ./data:/astral/data:ro              # Additional data files (read-only)
+    
+    # Environment variables
+    environment:
+      - JAVA_OPTS=-Xmx4g                    # Adjust memory as needed
+      - LD_LIBRARY_PATH=/astral/lib:/usr/lib/x86_64-linux-gnu
+    
+    # For GPU support (uncomment if you have NVIDIA GPUs)
+    # runtime: nvidia
+    # environment:
+    #   - NVIDIA_VISIBLE_DEVICES=all
+    #   - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    
+    # For systems with GPU support, you might need:
+    # devices:
+    #   - /dev/dri:/dev/dri                 # For Intel/AMD GPUs
+    
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+    
+    # Keep container running for interactive use
+    stdin_open: true
+    tty: true
+    
+    # Default command (can be overridden)
+    command: ["--help"]
+
+  # Alternative service for CPU-only execution
+  astral-cpu:
+    build: .
+    image: astral:latest
+    container_name: astral-cpu-container
+    
+    volumes:
+      - ./inputs:/astral/inputs:ro
+      - ./outputs:/astral/outputs:rw
+      - ./data:/astral/data:ro
+    
+    environment:
+      - JAVA_OPTS=-Xmx4g
+      - LD_LIBRARY_PATH=/astral/lib:/usr/lib/x86_64-linux-gnu
+    
+    entrypoint: ["/astral/astral_cpu.sh"]
+    command: ["--help"]
+    
+    stdin_open: true
+    tty: true
