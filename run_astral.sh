@@ -6,6 +6,7 @@
 # Usage: ./run_astral.sh -i input_file.tre [-o output_file.tre] [other_options]
 
 # ./run_astral.sh -i ../inputs/in200.tr -o ./out.tr
+# ./run_astral.sh -i ../inputs/1kp-2.tre -o ./out.tr
 
 # Define ASTRAL root directory (current working directory)
 ASTRAL_ROOT=$(pwd)
