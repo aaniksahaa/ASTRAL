@@ -295,6 +295,7 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 							tripartitionBatch[batchPosition++] = trip;
 							
 							if (batchPosition == tripartitionBatch.length) {
+								// copy: tripartitionBatch is refilled right after submit while the worker may still read it
 								final Tripartition[] tripartitionFullBatch = Arrays.copyOf(tripartitionBatch, tripartitionBatch.length);
 								Future<Long[]> s = Threading.submit(new Callable<Long[]>() {
 	
