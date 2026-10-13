@@ -295,10 +295,6 @@ public class WQInferenceConsumer extends AbstractInference<Tripartition> {
 							tripartitionBatch[batchPosition++] = trip;
 							
 							if (batchPosition == tripartitionBatch.length) {
-								// The worker must get its own copy: tripartitionBatch is refilled with the next
-								// batch right after submit, while the worker may still be reading it (the last,
-								// partial batch below is already copied). Without the copy the final quartet
-								// score (and -q scoring) is wrong for trees with more than batchSize nodes.
 								final Tripartition[] tripartitionFullBatch = Arrays.copyOf(tripartitionBatch, tripartitionBatch.length);
 								Future<Long[]> s = Threading.submit(new Callable<Long[]>() {
 	
